@@ -43,9 +43,3 @@ class TripletLoss():
         return config
 
 
-def contrastive_loss(y_true, dist, margin=1.0):
-    y_true = tf.cast(y_true, tf.float32)
-    square_dist = tf.square(dist)
-    margin_square = tf.square(tf.maximum(margin - dist, 0))
-    return tf.reduce_mean((1 - y_true) * square_dist + y_true * margin_square)
-
