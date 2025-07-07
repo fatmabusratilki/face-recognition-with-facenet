@@ -6,106 +6,146 @@ from tensorflow.keras.preprocessing.image import ImageDataGenerator
 import os
 
 class GetTriplets(tf.keras.utils.Sequence):
-    def __init__(self, image_folder_dataset, transform=None, batch_size=32):
-        self.transform = transform
-        self.image_folder_dataset = image_folder_dataset
+    def __init__(self, directory, image_data_generator, batch_size=32, target_size=(160, 160)):
+        """
+        directory: Root directory of the dataset (e.g., train, val).
+        image_data_generator: An instance of tf.keras.preprocessing.image.ImageDataGenerator.
+        batch_size: Batch size for triplets.
+        target_size: Target size for images.
+        """
+        self.directory = directory
+        self.image_data_generator = image_data_generator
         self.batch_size = batch_size
-        self.data = self.create_triplets()
+        self.target_size = target_size
 
-    def create_triplets(self):
-        person_dict = {}
-        
-        filepaths = self.image_folder_dataset.filepaths  # Görüntü yolları
-        labels = self.image_folder_dataset.classes # Class labels for each image
+        self.class_to_paths = {}
+        self.classes = sorted(os.listdir(directory)) # Get class names (folder names)
+        self.num_classes = len(self.classes)
 
-        # Group images by their labels
-        for img_path, label in zip(filepaths, labels):
-            if label not in person_dict:
-                person_dict[label] = []
-            person_dict[label].append(img_path)
+        if self.num_classes == 0:
+             raise ValueError(f"No classes found in the directory: {directory}")
 
-        
-        triplets = []
-        class_labels = list(person_dict.keys())
 
-        # Create triplets
+        all_paths = []
+        all_labels = []
+        self.label_to_class_name = {i: class_name for i, class_name in enumerate(self.classes)}
+        self.class_name_to_label = {class_name: i for i, class_name in enumerate(self.classes)}
 
-        for label, images in person_dict.items():
-            if len(images) < 2:
+
+        for i, class_name in enumerate(self.classes):
+            class_path = os.path.join(directory, class_name)
+            if os.path.isdir(class_path):
+                image_files = [os.path.join(class_path, f) for f in os.listdir(class_path) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+                if len(image_files) > 0:
+                    self.class_to_paths[i] = image_files
+                    all_paths.extend(image_files)
+                    all_labels.extend([i] * len(image_files))
+
+        self.all_paths = all_paths
+        self.all_labels = all_labels
+        self.num_images = len(self.all_paths)
+
+        if self.num_images == 0:
+             raise ValueError(f"No images found in the directory: {directory}")
+
+        self.labels = list(self.class_to_paths.keys()) # List of labels with at least one image
+        self.labels_with_min_two_images = [label for label, paths in self.class_to_paths.items() if len(paths) >= 2]
+
+        if not self.labels_with_min_two_images:
+             raise ValueError(f"No classes with at least two images found in {directory} to form positive pairs.")
+
+
+        # Pre-generate a pool of triplet indices for one epoch
+        self._triplet_indices = self._generate_triplet_indices_pool()
+
+
+    def _generate_triplet_indices_pool(self, pool_size_multiplier=1):
+        """Generates a large pool of triplet indices for one epoch."""
+        pool_size = self.num_images * pool_size_multiplier # Generate more triplets than images to sample from
+        triplet_indices = []
+
+        # We need indices into self.all_paths/self.all_labels
+        # Let's create a mapping from path to index in all_paths
+        path_to_index = {path: i for i, path in enumerate(self.all_paths)}
+
+
+        # Generate triplets based on labels
+        temp_triplets = []
+        # Iterate through each class that has at least 2 images
+        for anchor_label in self.labels_with_min_two_images:
+            anchor_positive_paths = self.class_to_paths[anchor_label]
+
+            if len(anchor_positive_paths) < 2:
                 continue
 
-            for anchor in images:
-                positive = random.choice([img for img in images if img != anchor])
-                
-                # Random negative selection
-                negative_label = random.choice([l for l in labels if l != label])
-                negative = random.choice(person_dict[negative_label])
-                
-                triplets.append((anchor, positive, negative))
-        
-        return triplets
-    
+            # Generate triplets where the anchor is from this class
+            for _ in range(pool_size // len(self.labels_with_min_two_images)): # Aim for roughly equal distribution across anchor classes
+                 # Choose anchor and positive from the same class
+                a_path, p_path = random.sample(anchor_positive_paths, 2)
+
+                # Choose a negative class different from the anchor class
+                negative_label = random.choice([l for l in self.labels if l != anchor_label])
+                # Choose a negative image from the negative class
+                n_path = random.choice(self.class_to_paths[negative_label])
+
+                # Get indices from path_to_index
+                a_idx = path_to_index[a_path]
+                p_idx = path_to_index[p_path]
+                n_idx = path_to_index[n_path]
+
+                temp_triplets.append((a_idx, p_idx, n_idx))
+
+        # Shuffle the generated triplets pool
+        random.shuffle(temp_triplets)
+        return temp_triplets
+
+
     def __len__(self):
-        return int(np.floor(len(self.data) / self.batch_size))
-    
+        # The number of batches per epoch is the total number of generated triplets divided by batch size
+        return len(self._triplet_indices) // self.batch_size
+
     def __getitem__(self, index):
-        batch_triplets = self.data[index * self.batch_size : (index + 1) * self.batch_size]
-        
-        anchor_imgs, positive_imgs, negative_imgs = [], [], []
-        
-        for anchor_path, positive_path, negative_path in batch_triplets:
-            anchor_img = self.load_image(anchor_path)
-            positive_img = self.load_image(positive_path)
-            negative_img = self.load_image(negative_path)
-            
-            anchor_imgs.append(anchor_img)
-            positive_imgs.append(positive_img)
-            negative_imgs.append(negative_img)
-        
-        return [np.array(anchor_imgs), np.array(positive_imgs), np.array(negative_imgs)]
-    
-    def load_image(self, img_path):
-        img = image.load_img(img_path, target_size=(160, 160))  # Resize if necessary
-        img = image.img_to_array(img) / 255.0  # Normalize
-        
-        if self.transform: 
-            img = self.transform(img)
-        
-        return img
+        """Generates one batch of data."""
+        # Get a batch of triplet indices from the pre-generated pool
+        batch_indices = self._triplet_indices[index * self.batch_size : (index + 1) * self.batch_size]
+
+        batch_anchor_imgs, batch_positive_imgs, batch_negative_imgs = [], [], []
+
+        for a_idx, p_idx, n_idx in batch_indices:
+
+            anchor_path = self.all_paths[a_idx]
+            positive_path = self.all_paths[p_idx]
+            negative_path = self.all_paths[n_idx]
+
+            # Load and transform each image
+            anchor_img = self._load_and_transform_image(anchor_path)
+            positive_img = self._load_and_transform_image(positive_path)
+            negative_img = self._load_and_transform_image(negative_path)
+
+            batch_anchor_imgs.append(anchor_img)
+            batch_positive_imgs.append(positive_img)
+            batch_negative_imgs.append(negative_img)
 
 
-# # Veri yolu
-# data_dir = "dataset/processed/train"  # Görsellerinizin bulunduğu klasör
+        # Convert lists of images to numpy arrays
+        batch_anchor_imgs = np.array(batch_anchor_imgs)
+        batch_positive_imgs = np.array(batch_positive_imgs)
+        batch_negative_imgs = np.array(batch_negative_imgs)
 
-# # Görsellerin yüklenmesi için ImageDataGenerator
-# datagen = ImageDataGenerator(rescale=1.0/255)  # Normalize
-# dataset = datagen.flow_from_directory(
-#     data_dir,
-#     target_size=(160, 160),  # Görsellerin boyutlandırılması
-#     batch_size=32,
-#     class_mode='sparse',  # Etiketlerin sayısal bir sınıf tipi olması için
-#     shuffle=False  # Sınıf ve dizin sırasını korumak için
-# )
+        return [batch_anchor_imgs, batch_positive_imgs, batch_negative_imgs], None # Return None for y_true
 
-# # GetTriplets Sınıfını Test Etme
-# triplets = GetTriplets(dataset)
+    def _load_and_transform_image(self, img_path):
+        """Loads an image and applies the generator's transformations."""
+        img = image.load_img(img_path, target_size=self.target_size)
+        img_array = image.img_to_array(img)
 
-# # Bir batch üçlü örneklerin yazdırılması
-# for batch_index in range(1):  # Test için ilk batch
-#     # anchor_imgs, positive_imgs, negative_imgs = triplets[batch_index]
-    
-#     # Birinci batch'in üçlülerini almak ve dosya yollarını yazdırmak
-#     anchor_imgs, positive_imgs, negative_imgs = triplets[0]  # İlk batch'i alıyoruz
+        img_array = img_array / 255.0 # Normalize
 
-#     # Anchor, positive ve negative dosya yollarını yazdırma
-#     print("Anchor Görseller (Dosya Yolları):")
-#     for i, anchor_path in enumerate(triplets.data[:5]):  # İlk 5 üçlü
-#         print(f"Anchor {i + 1}: {anchor_path[0]}")  # İlk eleman anchor'un yolu
+        return img_array
 
-#     print("\nPositive Görseller (Dosya Yolları):")
-#     for i, positive_path in enumerate(triplets.data[:5]):
-#         print(f"Positive {i + 1}: {positive_path[1]}")  # İkinci eleman positive'un yolu
 
-#     print("\nNegative Görseller (Dosya Yolları):")
-#     for i, negative_path in enumerate(triplets.data[:5]):
-#         print(f"Negative {i + 1}: {negative_path[2]}")  # Üçüncü eleman negative'in yolu
+    def on_epoch_end(self):
+        """Shuffle triplets or regenerate them at the end of each epoch."""
+        # Regenerate the pool of triplets for the next epoch to ensure variety
+        self._triplet_indices = self._generate_triplet_indices_pool()
+        print(f"✅ Regenerated triplet pool for the next epoch. Total triplets: {len(self._triplet_indices)}")
