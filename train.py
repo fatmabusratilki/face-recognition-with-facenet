@@ -1,309 +1,375 @@
 import tensorflow as tf
 import numpy as np
-import os
 import matplotlib.pyplot as plt
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from tensorflow.keras.optimizers import Adam, SGD, RMSprop, Adagrad
-from tensorflow.keras.callbacks import LearningRateScheduler
-from tensorflow import keras
 from tqdm import tqdm
+import gc
+import pandas as pd
+from tensorflow.keras.preprocessing import image
+import albumentations as A
+from tensorflow.keras import layers, models, regularizers
+import random #
+import os
 from facenet import FaceNet
 from loss import TripletLoss
 from create_triplets import GetTriplets
 from early_stopping import EarlyStopping
-import tensorflow as tf
-import math
-import random
-import json
-
-
-def random_search_experiments(
-    train_data, val_data,
-    n_trials=10,
-    batch_size_choices=[16, 32, 64],
-    learning_rate_range=(1e-5, 1e-3),
-    embedding_size_choices=[64, 128, 256],
-    optimizers=['adam', 'sgd', 'rmsprop', 'adagrad'],
-    save_results_path="random_experiment_results.json"
-):
-    results = []
-
-    for trial in range(n_trials):
-        print(f"\n🔁 Running trial {trial + 1}/{n_trials}...")
-
-        batch_size = random.choice(batch_size_choices)
-        learning_rate = 10 ** random.uniform(
-            math.log10(learning_rate_range[0]),
-            math.log10(learning_rate_range[1])
-        )
-        embedding_size = random.choice(embedding_size_choices)
-        optimizer = random.choice(optimizers)
-
-        model = FaceNet(embedding_size=embedding_size)
-        save_path = f"models/random_model_trial_{trial + 1}.h5"
-
-        history = train_model(
-            model,
-            train_data=train_data,
-            val_data=val_data,
-            batch_size=batch_size,
-            epochs=10,
-            learning_rate=learning_rate,
-            save_path=save_path,
-            optimizer=optimizer
-        )
-
-        result = {
-            "trial": trial + 1,
-            "batch_size": batch_size,
-            "learning_rate": learning_rate,
-            "embedding_size": embedding_size,
-            "optimizer": optimizer,
-            "final_val_loss": history["val_loss"][-1],
-            "final_val_acc": history["val_accuracy"][-1]
-        }
-        results.append(result)
-
-        # Her trial için grafik kaydet (opsiyonel)
-        plot_history(history, save_path=f"training_history_trial_{trial + 1}.png")
-
-    # Sonuçları JSON olarak kaydet
-    with open(save_results_path, "w") as f:
-        json.dump(results, f, indent=4)
-
-    print(f"\n✅ Random search completed. Results saved to {save_results_path}")
-
-
 
 print("GPU detected:", tf.config.list_physical_devices('GPU'))
 
-def triplet_accuracy(y_true, y_pred):
-    anchor, positive, negative = y_pred[0], y_pred[1], y_pred[2]
-    
+
+# Calculate triplet accuracy
+def triplet_accuracy(y_true, y_pred, margin = 0.2):
+    # This metric function will work during model.fit
+    # It expects y_pred to be the model's output (embeddings)
+    # and y_true is usually ignored for triplet loss accuracy
+    # We need to find a way to pass the anchors, positives, negatives to the metric
+    # A common approach is to create a custom training loop or a custom Model class
+
+    # As a simple metric for validation/manual checks, assuming y_pred is [anchor, positive, negative] embeddings:
+    if isinstance(y_pred, (list, tuple)) and len(y_pred) == 3:
+         anchor, positive, negative = y_pred
+    else:
+        # If y_pred is just the raw model output, this metric won't work directly in model.compile/fit
+        # Placeholder or error handling
+        # print("Warning: triplet_accuracy metric is not receiving the expected triplet embeddings.")
+        return 0.0 # Or raise an error
+
+
     # Euclidean distance between anchor and positive, anchor and negative
     positive_distance = tf.reduce_sum(tf.square(anchor - positive), axis=-1)
     negative_distance = tf.reduce_sum(tf.square(anchor - negative), axis=-1)
-    
-    # Doğru eşleşmeleri kontrol et
-    correct = tf.cast(positive_distance < negative_distance, tf.float32)
-    
-    # Accuracy = doğru eşleşmelerin sayısı / toplam triplet sayısı
+
+    # Check if positive distance is less than negative distance
+    correct = tf.cast(positive_distance + margin < negative_distance, tf.float32)
+
+    # Accuracy = correct predictions / total predictions
     accuracy = tf.reduce_mean(correct)
-    
+
     return accuracy
 
 
-def train_model(model, train_data, val_data, batch_size=16, epochs=10, learning_rate=0.001, save_path="model.h5", optimizer='adam'):
-    """
-    Train the model with the given parameters.
+def train_model(model,
+    train_data_dir, # Renamed for clarity: path to train directory
+    val_data_dir,   # Renamed for clarity: path to val directory
+    batch_size=32,
+    epochs=10,
+    learning_rate=3e-4,
+    save_path="model.keras",
+    best_model_path="best_model.keras",
+    optimizer='adam',
+    margin=0.2, # Triplet Loss margin
+    load_model_path=None,
+    freeze_base=False
+):
 
-    Parameters:
-    - model: The model to be trained.
-    - train_data: The training data.
-    - val_data: The validation data.
-    - epochs: Number of epochs to train the model.
-    - batch_size: Size of the batches of data.
-    - learning_rate: Learning rate for the optimizer.
-    - save_path: Path to save the trained model.
-    - optimizer: Optimizer to use for training.
+    # === Load pretrained weights if specified ===
+    if load_model_path is not None:
+        print(f"Loading pretrained model from {load_model_path}")
+        try:
+            model.load_weights(load_model_path)
+            print("Model weights loaded successfully.")
+        except Exception as e:
+            print(f"Error loading model weights: {e}")
+            print("Training will start without pretrained weights.")
+            load_model_path = None # Reset to None if loading fails
 
-    Returns:
-    - history: Training history object containing training and validation metrics.
-    """
-    
-    # train_datagen = ImageDataGenerator(rescale=1./255,)
-    train_datagen = ImageDataGenerator(
-        rescale=1./255,
-        rotation_range=30,  # Daha geniş dönüş açısı
-        # width_shift_range=0.3,
-        # height_shift_range=0.3,
-        # zoom_range=0.3,
-        # shear_range=0.2, 
-        # brightness_range=[0.7, 1.3],  # Parlaklık değişimi eklendi
-        horizontal_flip=True,
-        fill_mode='nearest'
+
+    if freeze_base:
+        print("🧊 Freezing base model layers...")
+        # Identify base layers to freeze. This depends on your model structure.
+        # Assuming the first few layers/blocks are the base.
+        # You might need to inspect your specific FaceNet model definition.
+        # For this general FaceNet, let's freeze conv and initial layers.
+        for layer in model.layers:
+             # Example: Freeze layers by name or type
+             if isinstance(layer, (layers.Conv2D, layers.BatchNormalization, layers.MaxPooling2D)):
+                 layer.trainable = False
+             elif layer.name in ['FaceNet_input', 'lambda']: # Don't freeze input or output normalization layer
+                 layer.trainable = True
+             else: # You might need to adjust this based on your model's structure
+                 layer.trainable = False # Freeze other layers by default
+        print("Base layers frozen. Check model.summary() to confirm.")
+        # model.summary() # Uncomment to see which layers are trainable
+
+
+    # === Data Generators ===
+    # Use a base ImageDataGenerator for common preprocessing (like rescaling)
+    # Triplet generation logic is handled by the GetTriplets Sequence.
+    base_datagen = ImageDataGenerator(rescale=1./255)
+
+    # Instantiate the custom triplet generators
+    try:
+        train_triplets_generator = GetTriplets(
+            directory=train_data_dir,
+            image_data_generator=base_datagen, # Pass the base generator
+            batch_size=batch_size,
+            target_size=(160, 160)
+        )
+        val_triplets_generator = GetTriplets(
+            directory=val_data_dir,
+            image_data_generator=base_datagen, # Pass the base generator
+            batch_size=batch_size,
+            target_size=(160, 160)
+        )
+        print(f"Training dataset created with {len(train_triplets_generator) * batch_size} potential triplets per epoch.")
+        print(f"Validation dataset created with {len(val_triplets_generator) * batch_size} potential triplets per epoch.")
+
+    except ValueError as e:
+        print(f"Error creating Triplet Dataset: {e}")
+        print("Please check your dataset directories and ensure classes have enough images.")
+        return None # Stop training if dataset creation fails
+
+
+    loss_fn = TripletLoss(alpha=margin) # Use the margin parameter
+
+    # === Cosine Decay Scheduler ===
+    # Calculate decay steps based on the length of the custom generator
+    # Note: The number of triplets per epoch can vary based on generation strategy.
+    # Using the generator's __len__ gives the number of *batches*.
+    steps_per_epoch = len(train_triplets_generator)
+    decay_steps = epochs * steps_per_epoch
+
+    # Ensure decay_steps is at least 1 to avoid errors if dataset is empty or very small
+    decay_steps = max(1, decay_steps)
+
+    lr_schedule = tf.keras.optimizers.schedules.CosineDecay(
+        initial_learning_rate=learning_rate,
+        decay_steps=decay_steps,
+        alpha=0.0  # Min LR = 0
     )
 
-    val_datagen = ImageDataGenerator(rescale=1./255)
-
-    train_dataset = train_datagen.flow_from_directory(
-        train_data,
-        target_size=(160, 160),
-        batch_size=batch_size,
-        class_mode='binary'
-    )
-
-    val_dataset = val_datagen.flow_from_directory(
-        val_data,
-        target_size=(160, 160),
-        batch_size=batch_size,
-        class_mode='binary'
-    )
-
-    # Create triplets
-    train_triplets = GetTriplets(train_dataset, batch_size=batch_size)
-    val_triplets = GetTriplets(val_dataset, batch_size=batch_size)
-
-    # Triplet loss
-    loss_fn = TripletLoss(alpha=0.3)
-
-    # Choose optimizer
+    # === Optimizer (with LR Schedule) ===
     if optimizer == 'adam':
-        optimizer = Adam(learning_rate=learning_rate, beta_1=0.9, beta_2=0.999, epsilon=1e-8, amsgrad=False)
-    elif optimizer == 'sgd':    
-        optimizer = SGD(learning_rate=learning_rate, momentum=0.9)
+        optimizer = Adam(learning_rate=lr_schedule)
+    elif optimizer == 'sgd':
+        optimizer = SGD(learning_rate=lr_schedule, momentum=0.9)
     elif optimizer == 'rmsprop':
-        optimizer = RMSprop(learning_rate=learning_rate, rho=0.9)
+        optimizer = RMSprop(learning_rate=lr_schedule, rho=0.9)
     elif optimizer == 'adagrad':
         optimizer = Adagrad(learning_rate=learning_rate, initial_accumulator_value=0.1)
     else:
-        raise ValueError("Unsupported optimizer. Choose from 'adam', 'sgd', 'rmsprop', or 'adagrad'.")
-    
-    print(f'optimizer: {optimizer}')
+        raise ValueError(f"Unsupported optimizer: {optimizer}. Choose from 'adam', 'sgd', 'rmsprop', or 'adagrad'.")
+
+    # === Compile the model ===
+    # When using a custom training loop, model.compile is not strictly necessary for optimizer/loss,
+    # but it can be useful for metrics. However, the triplet_accuracy metric requires triplet inputs.
+    # Let's compute metrics manually in the loop for clarity.
+    # model.compile(optimizer=optimizer, loss=loss_fn) # Cannot use model.compile easily with triplet metric
 
 
-    # Schedule learning rate
-    # scheduler = LearningRateScheduler(lambda epoch: learning_rate * (0.1 ** (epoch // 2)), verbose=1)
-
-    # Early stopping
-    early_stopping = EarlyStopping()
+    # === Early Stopping ===
+    early_stopping = EarlyStopping(patience=5, delta=0.0001) # Use default delta or configure
+    best_val_loss = float("inf") # Değişiklik: En iyi doğruluk için takip ediyoruz
 
     history = {
         "train_loss": [],
-        "val_loss": [], 
-        "train_accuracy": [],
-        "val_accuracy": []
+        "val_loss": [],
+        "train_accuracy": [], # Accuracy computed manually
+        "val_accuracy": []    # Accuracy computed manually
     }
 
-    # Training loop
+    initial_margin = margin # Store initial margin for cosine decay
+    final_margin = 0.2
+    total_epochs = epochs
+
+    # === Triplet Loss Training Loop ===
+    print("\nTriplet loss Training started...")
+
 
     for epoch in range(epochs):
+        print(f"\nEpoch {epoch+1}/{epochs}")
+
+        loss_fn.alpha = final_margin + (initial_margin - final_margin) * (1 + np.cos(np.pi * epoch / total_epochs)) / 2
+
+        print(f"\nEpoch {epoch+1}/{epochs} | Margin: {loss_fn.alpha:.2f}")
+
+        # Show current LR
+        current_step = epoch * steps_per_epoch
+        current_lr = lr_schedule(tf.cast(current_step, tf.float32)).numpy() # Use the schedule to get LR
+        print(f"Current Learning Rate: {current_lr:.8f}")
+
+        # === Training ===
         running_loss = 0.0
-        epoch_accuracy = 0.0
-        train_true, train_pred = [], []
-        val_true, val_pred = [], []
+        running_acc = 0.0 # Manually track accuracy
+        train_batches = len(train_triplets_generator)
 
-        for anchors, positives, negatives in tqdm(train_triplets, desc=f"Epoch {epoch + 1}/{epochs}"):
-            with tf.GradientTape() as tape:
-                anchor_embeddings = model(anchors, training=True)
-                positive_embeddings = model(positives, training=True)
-                negative_embeddings = model(negatives, training=True)
+        if train_batches == 0:
+             print("Skipping training epoch, train_triplets_generator yielded 0 batches.")
+             train_loss = 0
+             train_acc = 0
+        else:
+            for step in tqdm(range(train_batches), desc=f"Train {epoch + 1}/{epochs}"):
+                (anchors, positives, negatives), _ = train_triplets_generator[step] # Get batch from Sequence
 
-                loss = loss_fn(anchor_embeddings, positive_embeddings, negative_embeddings)
-                accuracy = triplet_accuracy(None, [anchor_embeddings, positive_embeddings, negative_embeddings])
+                # Move data to device (if using a multi-device strategy, Keras handles this)
+                # For single GPU/CPU, TF handles device placement automatically by default
 
-            gradients = tape.gradient(loss, model.trainable_variables)
-            optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+                with tf.GradientTape() as tape:
+                    emb_a = model(anchors, training=True)
+                    emb_p = model(positives, training=True)
+                    emb_n = model(negatives, training=True)
 
-            running_loss += loss.numpy()
-            epoch_accuracy += accuracy.numpy()
-        
-            # train_true.extend([1] * len(anchors))
-            # train_pred.extend([1 if np.mean(positive_embeddings[i]) < threshold else 0 for i in range(len(anchor_embeddings))])
+                    # Compute loss
+                    loss = loss_fn.call(None, (emb_a, emb_p, emb_n)) # Call the loss function
+                    l2_penalty = 1e-4 * sum(tf.nn.l2_loss(var) for var in model.trainable_variables)
+                    loss += l2_penalty  # Weight decay ekle
+
+                    # Compute accuracy for this batch
+                    acc = triplet_accuracy(None, [emb_a, emb_p, emb_n], margin=loss_fn.alpha) # Use the current margin
 
 
-        train_loss = running_loss / len(train_triplets)
-        train_accuracy = epoch_accuracy / len(train_triplets)
-        # train_accuracy = accuracy_score(train_true, train_pred)
+                grads = tape.gradient(loss, model.trainable_variables)
+                optimizer.apply_gradients(zip(grads, model.trainable_variables))
+
+                running_loss += loss.numpy()
+                running_acc += acc.numpy() # Accumulate accuracy
+
+            train_loss = running_loss / train_batches
+            train_acc = running_acc / train_batches
+
+
         history["train_loss"].append(train_loss)
-        history["train_accuracy"].append(train_accuracy)
+        history["train_accuracy"].append(train_acc)
+
+        # === Validation ===
+        val_loss_total = 0.0
+        val_acc_total = 0.0 # Manually track accuracy
+        val_batches = len(val_triplets_generator)
+
+        if val_batches == 0:
+            print("Skipping validation epoch, val_triplets_generator yielded 0 batches.")
+            val_loss = 0
+            val_acc = 0
+        else:
+            # Ensure generator is reset for a full pass
+            # val_triplets_generator.on_epoch_end() # Not needed for validation set
+
+            for step in tqdm(range(val_batches), desc=f"Val {epoch + 1}/{epochs}"):
+                (anchors, positives, negatives), _ = val_triplets_generator[step] # Get batch
+
+                # No gradient tape needed for validation
+                emb_a = model(anchors, training=False)
+                emb_p = model(positives, training=False)
+                emb_n = model(negatives, training=False)
+
+                # Compute loss
+                loss = loss_fn.call(None, (emb_a, emb_p, emb_n)) # Call the loss function
+
+                # Compute accuracy for this batch
+                acc = triplet_accuracy(None, [emb_a, emb_p, emb_n], margin=loss_fn.alpha) # Use the current margin
 
 
-        # Validation loop
-        val_running_loss = 0.0
-        val_epoch_accuracy = 0.0
-        val_true, val_pred = [], []
+                val_loss_total += loss.numpy()
+                val_acc_total += acc.numpy() # Accumulate accuracy
 
-        for anchors, positives, negatives in tqdm(val_triplets, desc=f"Validation {epoch + 1}/{epochs}"):
-                
-            anchor_embeddings = model(anchors, training=False)
-            positive_embeddings = model(positives, training=False)
-            negative_embeddings = model(negatives, training=False)
-                
-            loss = loss_fn(anchor_embeddings, positive_embeddings, negative_embeddings)
-            accuracy_val = triplet_accuracy(None, [anchor_embeddings, positive_embeddings, negative_embeddings])
+            val_loss = val_loss_total / val_batches
+            val_acc = val_acc_total / val_batches
 
-            val_running_loss += loss.numpy()
-            val_epoch_accuracy += accuracy_val.numpy()
-
-
-            # val_true.extend([1] * len(anchors))
-            # val_pred.extend([1 if np.mean(positive_embeddings[i]) < threshold else 0 for i in range(len(anchor_embeddings))])
-
-        val_loss = val_running_loss / len(val_triplets)
-        val_accuracy = val_epoch_accuracy / len(val_triplets)
-        # val_accuracy = accuracy_score(val_true, val_pred)
         history["val_loss"].append(val_loss)
-        history["val_accuracy"].append(val_accuracy)
+        history["val_accuracy"].append(val_acc)
 
-        print(f"Epoch [{epoch + 1}/{epochs}], Train Loss: {train_loss:.4f}, Train Accuracy: {train_accuracy:.4f}, Val Loss: {val_loss:.4f}, Val Accuracy: {val_accuracy:.4f}")
+        print(f"Epoch [{epoch + 1}/{epochs}] | Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f} | Val Loss: {val_loss:.4f}, Acc: {val_acc:.4f}")
+
+        # === Save best model ===
+        # Save based on validation loss (common) or validation accuracy
+        # Since the goal is distance-based accuracy, saving based on val_acc might be better
+        # Let's save based on val_acc.
+        if val_loss < best_val_loss: # Note: Comparison was val_loss < best_val_loss, changed to val_acc > best_val_acc
+            best_val_loss = val_loss # Store best accuracy now
+            try:
+                model.save(best_model_path, include_optimizer=False, save_format='keras') # Save weights only or full model without optimizer state
+                print(f"Best model saved at epoch {epoch + 1} with val_loss: {val_loss:.4f}")
+            except Exception as e:
+                print(f"Error saving best model: {e}")
 
         early_stopping(val_loss)
         if early_stopping.early_stop:
             print("Early stopping triggered.")
             break
 
-    # Save the model
-    model.save(save_path, include_optimizer=True, save_format='h5')
-    print(f"Model saved to {save_path}")
+        # Regenerate triplet pool at the end of the epoch for variety
+        train_triplets_generator.on_epoch_end()
+
+
+    # === Save final model ===
+    try:
+        model.save(save_path, include_optimizer=False, save_format='keras') # Save weights only or full model without optimizer state
+        print(f"Final model saved to {save_path}")
+    except Exception as e:
+        print(f"Error saving final model: {e}")
+
+    tf.keras.backend.clear_session()
+    gc.collect()
 
     return history
 
-def plot_history(history, save_path="training_history.png"):
+def plot_history(history, save_path_prefix="training_history"):
     """
-    Plot training and validation loss and accuracy.
+    Plot training and validation loss and accuracy in two separate plots.
     """
-    plt.figure(figsize=(10,6))
-    plt.plot(history['train_loss'], label='Train Loss')
-    plt.plot(history['val_loss'], label='Validation Loss')
-    plt.plot(history['train_accuracy'], label='Train Accuracy')
-    plt.plot(history['val_accuracy'], label='Validation Accuracy')
+    if not history:
+        print("No history data to plot.")
+        return
+
+    epochs = range(1, len(history['train_loss']) + 1)
+
+    # Plot Loss
+    plt.figure(figsize=(16, 6))
+    plt.subplot(1, 2, 1)  # Two rows, one column, first subplot
+    plt.plot(epochs, history['train_loss'], label='Train Loss')
+    plt.plot(epochs, history['val_loss'], label='Validation Loss')
     plt.xlabel('Epochs')
-    plt.ylabel('Metrics')
+    plt.ylabel('Loss')
+    plt.title('Training vs Validation Loss')
     plt.legend()
-    plt.title('Training and Validation Metrics')
-    plt.savefig(save_path)
-    #plt.show()
+  
+  
+    # Plot Accuracy
+    plt.subplot(1, 2, 2)  # Two rows, one column, second subplot
+    plt.plot(epochs, history['train_accuracy'], label='Train Accuracy')
+    plt.plot(epochs, history['val_accuracy'], label='Validation Accuracy')
+    plt.xlabel('Epochs')
+    plt.ylabel('Accuracy')
+    plt.title('Training vs Validation Accuracy')
+    plt.legend()
+  
+    plt.tight_layout()
+    plt.savefig(f"{save_path_prefix}.png")
+    plt.close()
+    print(f"Training history plots saved to {save_path_prefix}.png")
+
 
 if __name__ == "__main__":
 
     # Data paths
-    train_data = "datasets/train"
-    val_data = "datasets/val"
-    # train_data = "CelebA/processed/train"
-    # val_data = "CelebA/processed/val"
-    # train_data = "celeba_balanced/train"
-    # val_data = "celeba_balanced/val"
-    save_path = "model.h5"
+    train_data = "celeba_balanced/train"
+    val_data = "celeba_balanced/val"
+    # Model save path
+    save_path = "model.keras"
+    best_model_path="best_model.keras"
+    model = FaceNet(embedding_size=128)
+    batch_size = 16
+    epoch = 100
+    learning_rate = 1e-3
+    optimizer='adagrad'  # 'adam', 'sgd', 'rmsprop', 'adagrad'
+    margin = 0.2
 
-    # Model parameters
-    model = FaceNet(embedding_size=256)  # 128, 256, 512
-    # model.compile(optimizer='adam', loss=TripletLoss(alpha=0.3), metrics=[triplet_accuracy])
-    batch_size = 64
-    epochs = 8
-    learning_rate = 7.005382843891185e-05
-    optimizer = 'adam'  # Choose from 'adam', 'sgd', 'rmsprop', or 'adagrad'
-    # optimizer = Adam(learning_rate=learning_rate, beta_1=0.9, beta_2=0.999, epsilon=1e-07, amsgrad=False)
-    threshold = 0.4
-
-    # Train the model
     history = train_model(
-        model, 
-        train_data, 
-        val_data, 
-        batch_size=batch_size, 
-        epochs=epochs, 
-        learning_rate=learning_rate, 
-        save_path=save_path, 
-        optimizer=optimizer
+        model=model,
+        train_data_dir=train_data,
+        val_data_dir=val_data,
+        batch_size=batch_size,
+        epochs=epoch,
+        learning_rate=learning_rate,
+        save_path=save_path,
+        best_model_path=best_model_path,
+        optimizer=optimizer,
+        margin=margin,
+        load_model_path=None,
+        freeze_base=False
     )
 
-    plot_history(history, save_path="training_history.png")
+    plot_history(history)
     print("Training completed and history plotted.")
-
- 
-    # random_search_experiments(
-    #     train_data="celeba_balanced/train",
-    #     val_data="celeba_balanced/val",
-    #     n_trials=20  # veya 20
-    # )
