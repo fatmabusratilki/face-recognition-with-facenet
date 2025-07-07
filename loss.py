@@ -30,7 +30,7 @@ class TripletLoss():
         # Compute the distance between anchor and negative
         neg_dist = tf.reduce_sum(tf.square(anchor - negative), axis=1)
 
-        # Compute the triplett loss
+        # Compute the triplet loss
         loss = tf.maximum(pos_dist - neg_dist + self.alpha, 0.0)
 
         return tf.reduce_mean(loss)
