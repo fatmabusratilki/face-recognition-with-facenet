@@ -13,7 +13,7 @@ from tensorflow.keras import layers, models, regularizers
 from facenet import FaceNet
 
 # Load model
-model = tf.keras.models.load_model("last_model_finetuned_best_model.keras", custom_objects={'Lambda': tf.keras.layers.Lambda, 'Facenet': FaceNet}, compile=False)
+model = tf.keras.models.load_model("model.keras", custom_objects={'Lambda': tf.keras.layers.Lambda, 'Facenet': FaceNet}, compile=False)
 
 test_data_dir = 'dataset/processed/test'
 
