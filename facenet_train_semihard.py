@@ -14,6 +14,10 @@ import os
 from tensorflow.keras.utils import Sequence
 from sklearn.metrics.pairwise import pairwise_distances
 from hard_triplet_generator import TripletFolderLoader
+from facenet import FaceNet
+from loss import TripletLoss
+from semi_hard_triplet_selector import SemiHardTripletSelector
+from early_stopping import EarlyStopping
 
 print("GPU detected:", tf.config.list_physical_devices('GPU'))
 
@@ -28,75 +32,6 @@ augmentation_gen = ImageDataGenerator(
     fill_mode='nearest'
 )
 
-def FaceNet(embedding_size=128):
-    inputs = tf.keras.Input(shape=(160, 160, 3))
-
-    x = layers.Conv2D(64, (3, 3), padding='valid', activation='relu')(inputs)
-    x = layers.BatchNormalization()(x)
-    x = layers.MaxPooling2D((2, 2))(x)
-
-    x = layers.Conv2D(128, (3, 3), padding='same', activation='relu')(x)
-    x = layers.BatchNormalization()(x)
-    x = layers.MaxPooling2D((2, 2))(x)
-
-    x = layers.Conv2D(256, (3, 3), padding='same', activation='relu')(x)
-    x = layers.BatchNormalization()(x)
-    x = layers.MaxPooling2D((2, 2))(x)
-
-    x = layers.Conv2D(512, (3, 3), padding='same', activation='relu')(x)
-    x = layers.BatchNormalization()(x)
-    x = layers.MaxPooling2D((2, 2))(x)
-
-    x = layers.Flatten()(x)
-    x = layers.Dropout(0.5)(x)
-    x = layers.Dense(512, activation='relu')(x)
-    x = layers.Dense(embedding_size, activation=None)(x)
-
-    outputs = layers.Lambda(lambda x: tf.math.l2_normalize(x, axis=-1))(x)
-    return models.Model(inputs, outputs)
-
-class TripletLoss(tf.keras.losses.Loss): # Keras Loss sınıfından miras alması daha doğru
-    def __init__(self, alpha=0.2, name="TripletLoss"):
-        super().__init__(name=name)
-        """
-        Initialize the Triplet Loss.
-
-        Parameters:
-        - alpha: The margin between positive and negative pairs.
-        """
-        self.alpha = alpha
-
-    def call(self, y_true, y_pred): # Keras Loss standard call signature
-        """
-        Compute the triplet loss. Assumes y_pred is a tuple/list of (anchor, positive, negative) embeddings.
-        y_true is ignored, but required by the Keras API.
-
-        Parameters:
-        - y_true: Ignored.
-        - y_pred: A tuple or list containing (anchor_embeddings, positive_embeddings, negative_embeddings).
-
-        Returns:
-        - The triplet loss value.
-        """
-        anchor, positive, negative = y_pred
-
-        # Compute the distance between anchor and positive
-        pos_dist = tf.reduce_sum(tf.square(anchor - positive), axis=-1)
-
-        # Compute the distance between anchor and negative
-        neg_dist = tf.reduce_sum(tf.square(anchor - negative), axis=-1)
-
-        # Compute the triplett loss
-        loss = tf.maximum(pos_dist - neg_dist + self.alpha, 0.0)
-
-        return tf.reduce_mean(loss)
-
-    def get_config(self):
-        config = super().get_config()
-        config.update({
-            'alpha': self.alpha,
-        })
-        return config
 
 # Calculate triplet accuracy
 def triplet_accuracy(y_true, y_pred, margin = 0.2):
@@ -127,155 +62,6 @@ def triplet_accuracy(y_true, y_pred, margin = 0.2):
     accuracy = tf.reduce_mean(correct)
 
     return accuracy
-
-
-class SemiHardTripletSelector(Sequence):
-    def __init__(self, model, directory, batch_size=32, target_size=(160, 160), margin=0.2, preprocess_fn=None, max_triplets_per_epoch=500):
-        """
-        model: Embedding model (Keras).
-        directory: Data directory (same structure as flow_from_directory).
-        batch_size: Triplet batch size.
-        target_size: Target size for images.
-        margin: Initial margin, updated dynamically.
-        preprocess_fn: Optional preprocessing (e.g. rescaling).
-        max_triplets_per_epoch: Max number of triplets to select to reduce memory use.
-        """
-        self.model = model
-        self.directory = directory
-        self.batch_size = batch_size
-        self.target_size = target_size
-        self.margin = margin
-        self.preprocess_fn = preprocess_fn
-        self.max_triplets = max_triplets_per_epoch
-
-        self.class_to_paths = {}
-        self.labels = []
-        self.paths = []
-        self.label_to_index = {}
-        self.index_to_label = {}
-
-        self._load_paths()
-        self._prepare_epoch()
-
-    def _load_paths(self):
-        class_names = sorted([d for d in os.listdir(self.directory) if os.path.isdir(os.path.join(self.directory, d))])
-        self.label_to_index = {cls: i for i, cls in enumerate(class_names)}
-        self.index_to_label = {i: cls for cls, i in self.label_to_index.items()}
-
-        for cls in class_names:
-            class_dir = os.path.join(self.directory, cls)
-            image_paths = [os.path.join(class_dir, fname) for fname in os.listdir(class_dir)
-                           if fname.lower().endswith((".jpg", ".jpeg", ".png"))]
-            if len(image_paths) >= 2:  # Require at least two images per class
-                label_idx = self.label_to_index[cls]
-                self.class_to_paths[label_idx] = image_paths
-                self.paths.extend(image_paths)
-                self.labels.extend([label_idx] * len(image_paths))
-
-        self.labels = np.array(self.labels)
-        self.paths = np.array(self.paths)
-
-    def _prepare_epoch(self):
-        """Generates embeddings and finds semi-hard triplets for the entire dataset."""
-        # Load all images and embed them
-
-        X = np.array([self._load_and_preprocess_image(p) for p in self.paths])
-        embeddings = self.model.predict(X, batch_size=64, verbose=0)
-
-        # Compute pairwise distances
-        distances = pairwise_distances(embeddings, metric="euclidean")
-
-        # Generate triplets
-        self.triplets = self._mine_semi_hard_triplets(embeddings, distances)
-        random.shuffle(self.triplets)
-
-        # Limit the number of triplets to control memory
-        self.triplets = self.triplets[:self.max_triplets]
- 
-
-    def _mine_semi_hard_triplets(self, embeddings, distances):
-        """Returns list of (anchor_idx, pos_idx, neg_idx) satisfying semi-hard conditions."""
-        triplets = []
-        for anchor_idx in range(len(embeddings)):
-            anchor_label = self.labels[anchor_idx]
-
-            # Positive samples (same class, different image)
-            pos_indices = np.where(self.labels == anchor_label)[0]
-            pos_indices = pos_indices[pos_indices != anchor_idx]
-
-            if len(pos_indices) == 0:
-                continue
-
-            for pos_idx in pos_indices:
-                d_ap = distances[anchor_idx, pos_idx]
-
-                # Negative samples (different class)
-                neg_indices = np.where(self.labels != anchor_label)[0]
-                semi_hard_negatives = [neg_idx for neg_idx in neg_indices
-                                       if d_ap < distances[anchor_idx, neg_idx] < d_ap + self.margin] # burda margini 0.4 olarak ayarla 
-
-                if semi_hard_negatives:
-                    neg_idx = random.choice(semi_hard_negatives)
-                    triplets.append((anchor_idx, pos_idx, neg_idx))
-        return triplets
-
-    # def _load_and_preprocess_image(self, path):
-    #     img = image.load_img(path, target_size=self.target_size)
-    #     img = image.img_to_array(img)
-    #     if self.preprocess_fn:
-    #         img = self.preprocess_fn(img)
-    #     else:
-    #         img = img / 255.0
-    #     return img
-
-    # SemiHardTripletSelector içinde:
-    def _load_and_preprocess_image(self, path):
-        img = image.load_img(path, target_size=self.target_size)
-        img = image.img_to_array(img)
-        
-        if self.preprocess_fn:
-            img = self.preprocess_fn(img)
-        else:
-            img = img / 255.0
-
-        # ImageDataGenerator’dan rastgele augmentation uygulamak için:
-        img = augmentation_gen.random_transform(img)
-
-        return img
-
-    def __len__(self):
-        return len(self.triplets) // self.batch_size
-
-    def __getitem__(self, idx):
-        batch_triplets = self.triplets[idx * self.batch_size:(idx + 1) * self.batch_size]
-        anchor_imgs, pos_imgs, neg_imgs = [], [], []
-
-        for a_idx, p_idx, n_idx in batch_triplets:
-            anchor_imgs.append(self._load_and_preprocess_image(self.paths[a_idx]))
-            pos_imgs.append(self._load_and_preprocess_image(self.paths[p_idx]))
-            neg_imgs.append(self._load_and_preprocess_image(self.paths[n_idx]))
-
-        return [np.array(anchor_imgs), np.array(pos_imgs), np.array(neg_imgs)], None
-
-    def on_epoch_end(self):
-        self._prepare_epoch()
-
-class EarlyStopping:
-    def __init__(self, patience=5, delta=0.001):
-        self.patience = patience
-        self.delta = delta
-        self.best_loss = None
-        self.counter = 0
-        self.early_stop = False
-    def __call__(self, val_loss):
-        if self.best_loss is None or val_loss < self.best_loss - self.delta:
-            self.best_loss = val_loss
-            self.counter = 0
-        else:
-            self.counter += 1
-            if self.counter >= self.patience:
-                self.early_stop = True
-
 
 
 def train_model(model,
@@ -323,25 +109,11 @@ def train_model(model,
 
 
     # === Data Generators ===
-    # Use a base ImageDataGenerator for common preprocessing (like rescaling)
-    # Triplet generation logic is handled by the GetTriplets Sequence.
-    # base_datagen = ImageDataGenerator(rescale=1./255)
-
-    # train_datagen = ImageDataGenerator(
-    #     rescale=1./255,
-    #     rotation_range=15,  
-    #     width_shift_range=0.2,
-    #     height_shift_range=0.2,
-    #     zoom_range=0.3,
-    #     shear_range=0.2, 
-    #     brightness_range=[0.5, 1.5],
-    #     fill_mode='nearest'
-    # )
 
     base_datagen_preprocess = lambda x: x / 255.0
 
      # --- Initialize SemiHardTripletSelector for train and val ---
-    print("🎯 Creating training triplet selector...")
+    print("Creating training triplet selector...")
     train_triplets_selector = SemiHardTripletSelector(
         model=model,
         directory=train_data_dir,
@@ -352,7 +124,7 @@ def train_model(model,
         max_triplets_per_epoch=2048
     )
 
-    print("🎯 Creating validation triplet selector...")
+    print("Creating validation triplet selector...")
     val_triplets_selector = SemiHardTripletSelector(
         model=model,
         directory=val_data_dir,
@@ -363,13 +135,9 @@ def train_model(model,
         max_triplets_per_epoch=512
     )
     if len(train_triplets_selector) == 0 or len(val_triplets_selector) == 0:
-        print("🚫 Dataset veya triplet havuzunda sorun var. Lütfen verinizi kontrol edin.")
+        print("Dataset veya triplet havuzunda sorun var. Lütfen verinizi kontrol edin.")
         return None
     
-    # train_triplets_selector._load_and_preprocess_image = lambda path: augmentation_gen.random_transform(
-    #     image.img_to_array(image.load_img(path, target_size=(160,160))) / 255.0
-    # )
-
     loss_fn = TripletLoss(alpha=margin) # Use the margin parameter
 
     # === Cosine Decay Scheduler ===
@@ -400,13 +168,13 @@ def train_model(model,
 
     # === Early Stopping ===
     early_stopping = EarlyStopping(patience=10, delta=0.001) # Use default delta or configure
-    best_val_loss = float("inf") # Değişiklik: En iyi doğruluk için takip ediyoruz
+    best_val_loss = float("inf") 
 
     history = {
         "train_loss": [],
         "val_loss": [],
-        "train_accuracy": [], # Accuracy computed manually
-        "val_accuracy": []    # Accuracy computed manually
+        "train_accuracy": [], 
+        "val_accuracy": []   
     }
 
     initial_margin = margin # Store initial margin for cosine decay
@@ -414,7 +182,7 @@ def train_model(model,
     total_epochs = epochs
 
     # === Triplet Loss Training Loop ===
-    print("\n🚀 Triplet loss Training started...")
+    print("\nTriplet loss Training started...")
 
 
     for epoch in range(epochs):
@@ -490,7 +258,7 @@ def train_model(model,
         history["val_loss"].append(val_loss)
         history["val_accuracy"].append(val_acc)
 
-        print(f"📊 Epoch [{epoch + 1}/{epochs}] | Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f} | Val Loss: {val_loss:.4f}, Acc: {val_acc:.4f}")
+        print(f"Epoch [{epoch + 1}/{epochs}] | Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f} | Val Loss: {val_loss:.4f}, Acc: {val_acc:.4f}")
 
         # === Save best model ===
         # Save based on validation loss (common) or validation accuracy
@@ -500,9 +268,9 @@ def train_model(model,
             best_val_loss = val_loss # Store best accuracy now
             try:
                 model.save(best_model_path, include_optimizer=False, save_format='keras') # Save weights only or full model without optimizer state
-                print(f"✅ Best model saved at epoch {epoch + 1} with val_acc: {val_loss:.4f}")
+                print(f"Best model saved at epoch {epoch + 1} with val_acc: {val_loss:.4f}")
             except Exception as e:
-                print(f"⚠️ Error saving best model: {e}")
+                print(f"Error saving best model: {e}")
 
         early_stopping(val_loss)
         if early_stopping.early_stop:
@@ -513,9 +281,9 @@ def train_model(model,
     # === Save final model ===
     try:
         model.save(save_path, include_optimizer=False, save_format='keras') # Save weights only or full model without optimizer state
-        print(f"✅ Final model saved to {save_path}")
+        print(f"Final model saved to {save_path}")
     except Exception as e:
-        print(f"⚠️ Error saving final model: {e}")
+        print(f"Error saving final model: {e}")
 
     tf.keras.backend.clear_session()
     gc.collect()
@@ -561,8 +329,8 @@ def plot_history(history, save_path_prefix="training_history"):
 if __name__ == "__main__":
 
     # Data paths
-    train_data = "celeba_balanced/val"  # Adjusted to match your dataset structure
-    val_data = "dataset/processed/test"  # Adjusted to match your dataset structure
+    train_data = "dataset/train"  # Adjusted to match your dataset structure
+    val_data = "dataset/val"  # Adjusted to match your dataset structure
     # Model save path
     save_path = "last_model_finetuned.keras"
     best_model_path="last_model_finetuned_best_model.keras"
