@@ -9,40 +9,12 @@ import threading
 import tensorflow as tf
 from tensorflow.keras import layers, models
 from mtcnn import MTCNN
+from facenet import FaceNet
 
-# ========== MODEL YÜKLEME ==========
-def FaceNet(embedding_size=128):
-    inputs = tf.keras.Input(shape=(160, 160, 3))
-
-    x = layers.Conv2D(64, (3, 3), padding='valid', activation='relu')(inputs)
-    x = layers.BatchNormalization()(x)
-    x = layers.MaxPooling2D((2, 2))(x)
-
-    x = layers.Conv2D(128, (3, 3), padding='same', activation='relu')(x)
-    x = layers.BatchNormalization()(x)
-    x = layers.MaxPooling2D((2, 2))(x)
-
-    x = layers.Conv2D(256, (3, 3), padding='same', activation='relu')(x)
-    x = layers.BatchNormalization()(x)
-    x = layers.MaxPooling2D((2, 2))(x)
-
-    x = layers.Conv2D(512, (3, 3), padding='same', activation='relu')(x)
-    x = layers.BatchNormalization()(x)
-    x = layers.MaxPooling2D((2, 2))(x)
-
-    x = layers.Flatten()(x)
-    x = layers.Dropout(0.3)(x)
-    x = layers.Dense(512, activation='relu')(x)
-    x = layers.Dense(embedding_size, activation=None)(x)
-
-    outputs = layers.Lambda(lambda x: tf.math.l2_normalize(x, axis=-1))(x)
-    return models.Model(inputs, outputs)
-
-# ========== Model Yükleme ==========
+# ========== Load Model ==========
 model_path = "fine_tune_best_model_same_data.keras"
 model = FaceNet(embedding_size=256)
 model.load_weights(model_path)
-# model = tf.keras.models.load_model(model_path, custom_objects={'Lambda': tf.keras.layers.Lambda, 'Facenet': FaceNet}, compile=False)
 detector = MTCNN()
 
 def load_model_from_path(path):
@@ -50,19 +22,19 @@ def load_model_from_path(path):
     model = tf.keras.models.load_model(path)
     model.summary()
 
-# ========== ÖN İŞLEME ==========
+# ========== PRE-PROCESSING ==========
 def preprocess(img):
     img = tf.image.resize(img, (160, 160))
-    img = (img / 255.0) #- 1.0  # [-1, 1] aralığına normalize #Burdaki -1.0 değerini değiştirerek normalizasyonu ayarlayabilirsin
+    img = (img / 255.0) 
     return tf.expand_dims(img, axis=0)
 
-# ========== EMBEDDING HESAPLAMA ==========
+# ========== EMBEDDING CALCULATION ==========
 def get_embedding(face_img):
     face = preprocess(face_img)
     emb = model.predict(face, verbose=0)[0]
     return emb
 
-# ========== KİŞİ EKLE ==========
+# ========== ADD PERSON ==========
 def add_new_person():
     name = simpledialog.askstring("Yeni Kişi", "Kişinin adını ve soyadını girin:")
     if not name: return
@@ -113,7 +85,7 @@ def delete_person_gui():
             messagebox.showerror("Hata", f"{name} bulunamadı.")
 
 
-# ========== VERİ YÜKLE ==========
+# ========== LOAD DATA==========
 def load_known_faces():
     known_embeddings = {}
     for person in os.listdir("known_person"):
@@ -136,7 +108,7 @@ def load_known_faces():
             known_embeddings[person] = np.mean(embeddings, axis=0)
     return known_embeddings
 
-# ========== YÜZ TANIMA ==========
+# ========== FACE RECOGNITION ==========
 def recognize_faces():
     known_faces = load_known_faces()
     if not known_faces:
@@ -157,7 +129,7 @@ def recognize_faces():
             x2 = min(x + w, frame.shape[1])
             y2 = min(y + h, frame.shape[0])
             face = rgb[y:y2, x:x2]
-            # face = rgb[y:y+h, x:x+w]
+            
             if face.size == 0: continue
 
             try:
@@ -190,7 +162,7 @@ def recognize_faces():
 
     cap.release(); cv2.destroyAllWindows()
 
-# ========== TKINTER ARAYÜZ ==========
+# ========== TKINTER INTERFACE ==========
 
 def start_recognition_thread():
     threading.Thread(target=recognize_faces).start()
@@ -200,7 +172,7 @@ root.title("Face Recognition System - TensorFlow")
 root.geometry("450x400")
 root.configure(bg="#2b2b2b")
 
-# Başlık
+# Label
 tk.Label(
     root, 
     text="Face Recognition System", 
@@ -209,7 +181,7 @@ tk.Label(
     bg="#2b2b2b"
 ).pack(pady=30)
 
-# Butonları içeren çerçeve
+# Frame with buttons
 button_frame = tk.Frame(root, bg="#2b2b2b")
 button_frame.pack(pady=10)
 
@@ -227,28 +199,13 @@ def create_button(text, command, pady=10):
         command=command
     ).pack(pady=pady)
 
-# Butonlar
+# Buttons
 create_button("Start Face Recognition", start_recognition_thread)
 create_button("Add New Person", add_new_person)
 create_button("Delete Person", delete_person_gui)
 create_button("EXIT", root.destroy)
 
 root.mainloop()
-
-# # ========== TKINTER ARAYÜZ ==========
-# def start_recognition_thread():
-#     threading.Thread(target=recognize_faces).start()
-
-# root = tk.Tk()
-# root.title("Yüz Tanıma Sistemi - TensorFlow")
-# root.geometry("400x300")
-# root.configure(bg="#1e1e1e")
-
-# tk.Label(root, text="Yüz Tanıma Sistemi", font=("Arial", 18), fg="white", bg="#1e1e1e").pack(pady=30)
-# tk.Button(root, text="Yüz Tanımaya Başla", font=("Arial", 14), command=start_recognition_thread).pack(pady=20)
-# tk.Button(root, text="Yeni Kişi Ekle", font=("Arial", 14), command=add_new_person).pack(pady=10)
-# tk.Button(root, text="Kişi Sil", font=("Arial", 12), command=delete_person_gui).pack(pady=5)
-# tk.Button(root, text="Çıkış", font=("Arial", 12), command=root.destroy).pack(pady=10)
 
 
 root.mainloop()
