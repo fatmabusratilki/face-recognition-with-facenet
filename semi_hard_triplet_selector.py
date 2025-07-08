@@ -1,3 +1,4 @@
+# Created by Fatma Büşra Tilki / fatmabusratilki
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 import tensorflow as tf
 import numpy as np
