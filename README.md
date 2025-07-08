@@ -4,7 +4,7 @@ This project implements a deep learning-based facial recognition system using MT
 
 ## Project Overview
 
-The system takes a facial image as input, detects the face using MTCNN, and generates a 128-dimensional embedding vector with FaceNet. Then, this embedding is compared to a database of known embeddings to identify the person using a predefined distance threshold.
+The system takes a facial image as input, detects the face using MTCNN, and generates a 256-dimensional embedding vector with FaceNet. Then, this embedding is compared to a database of known embeddings to identify the person using a predefined distance threshold.
 
 ## Features
 
@@ -24,19 +24,19 @@ The system takes a facial image as input, detects the face using MTCNN, and gene
 - Extracts landmarks and bounding boxes.
 
 ### 2. **Face Embedding (FaceNet)**
-- Projects faces into a 128D Euclidean space.
-- Uses L2 normalization and triplet loss.
+- Projects faces into a 256D Euclidean space.
+- Uses L2 normalisation and triplet loss.
 - Distinguishes identities by comparing vector distances.
 
 ### 3. **Triplet Loss**
 - Ensures:  
   `distance(anchor, positive) + margin < distance(anchor, negative)`
-- Uses semi-hard negative mining after initial epochs for better generalization.
+- Uses semi-hard negative mining after initial epochs for better generalisation.
 
 ## Dataset
 
 ### Training Set
-- Based on CelebA dataset with 10,177 identities and 202,599 images.
+- Based on the CelebA dataset with 10,177 identities and 202,599 images.
 - Balanced to 800 identities, 20 images per identity.
 - Gender and image attribute (e.g., glasses) distribution considered.
 
@@ -48,9 +48,10 @@ The system takes a facial image as input, detects the face using MTCNN, and gene
 ## Model Architecture
 
 - Input size: `160x160x3`
-- 5 convolutional layers + BatchNorm + MaxPooling
-- Flatten → Dense layers → Dropout
-- Final embedding output normalized with L2
+- Final embedding output normalised with L2
+
+  ![Model Architecture](https://github.com/user-attachments/assets/3bee58c4-ea25-451b-b35c-41bdd839c599)
+
 
 ## Hardware and Software
 
@@ -61,33 +62,6 @@ The system takes a facial image as input, detects the face using MTCNN, and gene
 | Language       | Python 3.9                     |
 | Libraries      | scikit-learn, matplotlib       |
 
-## Training Process
-
-- Optimizer: **RMSprop** (after testing with Adam, Adagrad, SGD)
-- Best hyperparameters:  
-  - `batch_size = 32`  
-  - `learning_rate = 1e-4` with **Cosine Decay Scheduler**
-- Uses **early stopping** with `patience = 5`
-
-## Results
-
-- Test set size: 380 images (190 positive + 190 negative pairs)
-- Accuracy: **85%**
-- Confusion matrix and ROC curve used for evaluation
-![alt text](image-1.png)
-![alt text](image-2.png)
-![alt text](image-3.png)
-## Example Use Cases
-
-- Verify identity from facial photo
-- Compare unknown image to database
-- Real-time webcam recognition support
-
-## Future Work
-
-- Train on larger datasets (e.g., VGGFace2)
-- Improve generalization to unseen environments
-- Optimize for edge deployment (e.g., Jetson Nano)
 
 ## Getting Started
 
@@ -111,7 +85,15 @@ The system takes a facial image as input, detects the face using MTCNN, and gene
    ```bash
    python clean_dataset.py
 
-### Model Training
+
+### Training Process
+
+- Optimizer: **RMSprop** (after testing with Adam, Adagrad, SGD)
+- Best hyperparameters:  
+  - `batch_size = 32`  
+  - `learning_rate = 1e-4` with **Cosine Decay Scheduler**
+- Uses **early stopping** with `patience = 5`
+  
 1. **Train with Random Triplets**
    Start the initial training phase with randomly selected triplets:
    ```bash
@@ -122,17 +104,43 @@ The system takes a facial image as input, detects the face using MTCNN, and gene
    ```bash
    python facenet_train_semihard.py
 
-#### Training History
-Below is the accuracy and loss progression during training:
-![alt text](image.png)
+  #### Training History
+  Below is the accuracy and loss progression during training:
+  ![Training History](https://github.com/user-attachments/assets/dd007481-ea81-4e69-be98-8b1c6624c53d)
 
+## Results
+
+- Test set size: 380 images (190 positive + 190 negative pairs)
+- Accuracy: **85%**
+- Confusion matrix and ROC curve used for evaluation
+  
+![Image](https://github.com/user-attachments/assets/a659a7a3-827a-4631-8a3e-adebc517cff4)
+![Image](https://github.com/user-attachments/assets/0b1a0230-d0df-48fb-98a1-2dda06522a48)
+#### Evaluation Metrics
+
+| Metric     | Value   |
+|------------|---------|
+| Accuracy   | 0.8526  |
+| Precision  | 0.8490  |
+| Recall     | 0.8579  |
+| F1-Score   | 0.8534  |
+| ROC AUC    | 0.9226  |
 
 ## Real-Time Demo
-After training the model or downloading the pretrained model (`model.zip`), you can run real-time face recognition using your webcam:
-    ```bash
-    python demo.py
+- After training the model or downloading the pre-trained model (`model.zip`), you can run real-time face recognition using your webcam:
+  ```bash
+  python demo.py
 
+## Example Use Cases
 
+- Verify identity from facial photo
+- Compare the unknown image to the database
+- Real-time webcam recognition support
+
+## Future Work
+
+- Train on larger datasets (e.g., VGGFace2)
+- Improve generalisation to unseen environments
 
 
 
