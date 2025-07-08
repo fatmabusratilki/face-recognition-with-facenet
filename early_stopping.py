@@ -1,3 +1,4 @@
+# Created by Fatma Büşra Tilki / fatmabusratilki
 class EarlyStopping:
     def __init__(self, patience=5, delta=0):
         self.patience = patience
