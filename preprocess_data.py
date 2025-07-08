@@ -1,3 +1,4 @@
+# Created by Fatma Büşra Tilki / fatmabusratilki
 import numpy as np
 import matplotlib.pyplot as plt
 from facenet_pytorch import MTCNN
