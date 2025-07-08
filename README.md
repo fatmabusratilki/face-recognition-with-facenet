@@ -35,17 +35,17 @@ The system takes a facial image as input, detects the face using MTCNN, and gene
 
 ## Dataset
 
-### 🔹 Training Set
+### Training Set
 - Based on CelebA dataset with 10,177 identities and 202,599 images.
 - Balanced to 800 identities, 20 images per identity.
 - Gender and image attribute (e.g., glasses) distribution considered.
 
-### 🔹 Validation & Test Sets
+### Validation & Test Sets
 - Validation: 100 identities, 20 images per identity.
 - Test: 40 identities, 5 images each from personal & internet sources.
 - Designed to reflect real-world challenges (occlusion, profile views, etc.).
 
-## 🏗️ Model Architecture
+## Model Architecture
 
 - Input size: `160x160x3`
 - 5 convolutional layers + BatchNorm + MaxPooling
@@ -74,7 +74,9 @@ The system takes a facial image as input, detects the face using MTCNN, and gene
 - Test set size: 380 images (190 positive + 190 negative pairs)
 - Accuracy: **85%**
 - Confusion matrix and ROC curve used for evaluation
-
+![alt text](image-1.png)
+![alt text](image-2.png)
+![alt text](image-3.png)
 ## Example Use Cases
 
 - Verify identity from facial photo
@@ -110,22 +112,29 @@ The system takes a facial image as input, detects the face using MTCNN, and gene
    python clean_dataset.py
 
 ### Model Training
-   
-**Train with Random Triplets**
+1. **Train with Random Triplets**
+   Start the initial training phase with randomly selected triplets:
    ```bash
-   python clean_dataset.py
+   python train.py
 
-** Fine-Tune with Semi-Hard Triplets**
-  To improve performance on difficult examples:
-  ```bash
-  python facenet_train_semihard.py
+2. **Fine-Tune with Semi-Hard Negative Triplets**
+   For better discrimination between difficult cases, fine-tune the model using semi-hard negatives:
+   ```bash
+   python facenet_train_semihard.py
+
+#### Training History
+Below is the accuracy and loss progression during training:
+![alt text](image.png)
+
 
 ## Real-Time Demo
-
 After training the model or downloading the pretrained model (`model.zip`), you can run real-time face recognition using your webcam:
+    ```bash
+    python demo.py
 
-```bash
-python demo.py
+
+
+
 
 
 
