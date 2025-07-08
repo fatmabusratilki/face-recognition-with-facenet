@@ -1,3 +1,4 @@
+# Created by Fatma Büşra Tilki / fatmabusratilki
 import tensorflow as tf
 
 class TripletLoss():
