@@ -1,3 +1,4 @@
+# Created by Fatma Büşra Tilki / fatmabusratilki
 import random
 import tensorflow as tf
 import numpy as np
