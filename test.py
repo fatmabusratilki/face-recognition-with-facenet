@@ -1,3 +1,4 @@
+# Created by Fatma Büşra Tilki / fatmabusratilki
 import numpy as np
 import os
 from PIL import Image
