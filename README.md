@@ -142,6 +142,29 @@ The system takes a facial image as input, detects the face using MTCNN, and gene
 - Train on larger datasets (e.g., VGGFace2)
 - Improve generalisation to unseen environments
 
+---
+
+## Academic Context
+
+This project was developed as a **Graduation Project** for the **Department of Computer Engineering**,  
+**Faculty of Engineering, Uludag University, Türkiye (2025)**.
+
+- **Advisor:** Prof. Dr. Kemal Fidanboylu  
+- **Developer:** Fatma Busra Tilki
+
+The system features a comprehensive, deep learning–based facial recognition pipeline utilising FaceNet, MTCNN, and triplet loss optimisation, supported by real-time inference and dataset preprocessing. It was built as part of the undergraduate thesis to explore advanced identity recognition techniques in computer vision.
+
+---
+
+## Author
+
+**Fatma Busra Tilki**  
+🔗 GitHub Repository: [face-recognition-with-facenet](https://github.com/fatmabusratilki/face-recognition-with-facenet)
+
+If you found this project helpful or inspiring, feel free to ⭐️ it and share your thoughts.
+
+
+
 
 
 
