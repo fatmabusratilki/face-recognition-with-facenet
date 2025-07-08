@@ -1,3 +1,4 @@
+# Created by Fatma Büşra Tilki / fatmabusratilki
 import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
@@ -51,8 +52,8 @@ def triplet_accuracy(y_true, y_pred, margin = 0.2):
 
 
 def train_model(model,
-    train_data_dir, # Renamed for clarity: path to train directory
-    val_data_dir,   # Renamed for clarity: path to val directory
+    train_data_dir, # path to train directory
+    val_data_dir,   # path to val directory
     batch_size=32,
     epochs=10,
     learning_rate=3e-4,
