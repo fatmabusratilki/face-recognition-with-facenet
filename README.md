@@ -127,7 +127,7 @@ The system takes a facial image as input, detects the face using MTCNN, and gene
 | ROC AUC    | 0.9226  |
 
 ## Real-Time Demo
-- After training the model or downloading the pre-trained model (`model.zip`), you can run real-time face recognition using your webcam:
+- After training the model you can run real-time face recognition using your webcam:
   ```bash
   python demo.py
 
