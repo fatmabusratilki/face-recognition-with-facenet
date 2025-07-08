@@ -1,4 +1,4 @@
-# file ipython-input-13-db064894ced8
+# Created by Fatma Büşra Tilki / fatmabusratilki
 import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
