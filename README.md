@@ -158,7 +158,7 @@ The system features a comprehensive, deep learning–based facial recognition pi
 
 ## Author
 
-**Fatma Busra Tilki**  
+**Fatma Büşra Tilki**  
 🔗 GitHub Repository: [face-recognition-with-facenet](https://github.com/fatmabusratilki/face-recognition-with-facenet)
 
 If you found this project helpful or inspiring, feel free to ⭐️ it and share your thoughts.
