@@ -150,7 +150,7 @@ This project was developed as a **Graduation Project** for the **Department of C
 **Faculty of Engineering, Uludag University, Türkiye (2025)**.
 
 - **Advisor:** Prof. Dr. Kemal Fidanboylu  
-- **Developer:** Fatma Busra Tilki
+- **Developer:** Fatma Büşra Tilki
 
 The system features a comprehensive, deep learning–based facial recognition pipeline utilising FaceNet, MTCNN, and triplet loss optimisation, supported by real-time inference and dataset preprocessing. It was built as part of the undergraduate thesis to explore advanced identity recognition techniques in computer vision.
 
